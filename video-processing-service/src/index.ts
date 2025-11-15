@@ -1,29 +1,46 @@
 import express from "express";
-import ffmpeg from "fluent-ffmpeg";
+import { convertVideo, deleteProcessedVideo, deleteRawVideo, downloadRawVideo, setUpDirectories, uploadProcessedVideo } from "./storage";
+
+setUpDirectories();
 
 const app = express();
 app.use(express.json());
 
-app.post("/process-video", (req, res) => {
+app.post("/process-video", async (req, res) => {
 
-    // Get path of the input video from request body
-    const inputFilePath = req.body.inputFilePath;
-    const outputFilePath = req.body.outputFilePath;
-
-    if (!inputFilePath || !outputFilePath) {
-        return res.status(400).send("Input and outp`ut file paths are required.");
+    let data;
+    try {
+        const message = Buffer.from(req.body.message.data, "base64").toString();
+        data = JSON.parse(message);
+        if (!data.name) {
+            throw new Error("Missing 'name' field in message data");
+        }
+    } catch (error) {
+        console.error("Error parsing request body:", error);
+        return res.status(400).send("Invalid request body: missing filename");
     }
 
-    ffmpeg(inputFilePath)
-        .outputOptions("-vf", "scale=-1:360") // Resize video to 360p
-        .on("end", () => {
-            res.status(200).send("Video processing finished successfully.");
-        })
-        .on("error", (err) => {
-            console.error(`Error processing video: ${err.message}`);
-            res.status(500).send(`Internal server error: ${err.message}`);
-        })
-        .save(outputFilePath);
+    const rawVideoName = data.name;
+    const processedVideoName = `processed-${rawVideoName}`;
+
+    await downloadRawVideo(rawVideoName);
+
+    try {
+        await convertVideo(rawVideoName, processedVideoName);
+    } catch (error) {
+
+        console.error("Error during video conversion:", error);
+        return res.status(500).send("Error processing video");
+    }
+
+    await uploadProcessedVideo(processedVideoName);
+
+    await Promise.all([
+        deleteRawVideo(rawVideoName),
+        deleteProcessedVideo(processedVideoName)
+    ]);
+
+    res.status(200).send("Video processed successfully");
 
 });
 
